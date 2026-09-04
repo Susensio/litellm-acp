@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
+import tempfile
 import threading
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, BinaryIO
 
 from acp import PROTOCOL_VERSION, connect_to_agent
 from acp.schema import ClientCapabilities, Implementation
@@ -20,7 +22,10 @@ from .client import ACPCollectorClient
 from .errors import ACPAdapterNotFoundError
 from .translate import apply_response_text, messages_to_prompt
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_TIMEOUT_SECONDS = 300.0
+STDERR_TAIL_LIMIT = 4096
 
 
 class ACPCustomLLM(CustomLLM):
@@ -121,14 +126,20 @@ def _run_sync(coro: Coroutine[Any, Any, ModelResponse]) -> ModelResponse:
 
 
 async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float) -> str:
+    # A real file, not PIPE: a pipe's OS buffer can fill and block the agent's
+    # write() once it's written enough stderr, and reading it back afterwards
+    # needs every process holding the write end (grandchildren included) to
+    # have closed it, which isn't guaranteed once we've merely killed `proc`.
+    stderr_file = tempfile.TemporaryFile()
     try:
         proc = await asyncio.create_subprocess_exec(
             *adapter.argv(),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=stderr_file,
         )
     except OSError as exc:
+        stderr_file.close()
         raise CustomLLMError(
             status_code=500,
             message=f"litellm-acp: failed to start '{' '.join(adapter.argv())}': {exc}",
@@ -136,6 +147,7 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
 
     if proc.stdin is None or proc.stdout is None:
         proc.kill()
+        stderr_file.close()
         raise CustomLLMError(
             status_code=500,
             message=f"litellm-acp: '{adapter.binary}' did not expose stdio pipes",
@@ -148,7 +160,9 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
             conn.initialize(
                 protocol_version=PROTOCOL_VERSION,
                 client_capabilities=ClientCapabilities(),
-                client_info=Implementation(name="litellm-acp", title="litellm-acp", version=__version__),
+                client_info=Implementation(
+                    name="litellm-acp", title="litellm-acp", version=__version__
+                ),
             ),
             timeout=timeout,
         )
@@ -161,6 +175,12 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
             timeout=timeout,
         )
     except TimeoutError as exc:
+        logger.error(
+            "'%s' did not respond within %ss; stderr: %s",
+            adapter.binary,
+            timeout,
+            _read_stderr_tail(stderr_file),
+        )
         raise CustomLLMError(
             status_code=504,
             message=(
@@ -168,10 +188,25 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
                 "Pass a longer timeout=... to litellm.completion(...) if the agent is just slow."
             ),
         ) from exc
+    except Exception:
+        logger.error(
+            "'%s' failed; stderr: %s",
+            adapter.binary,
+            _read_stderr_tail(stderr_file),
+            exc_info=True,
+        )
+        raise
     finally:
         await _shutdown(proc, conn)
+        stderr_file.close()
 
     return client_impl.text
+
+
+def _read_stderr_tail(stderr_file: BinaryIO) -> str:
+    stderr_file.seek(0)
+    data = stderr_file.read()
+    return data.decode(errors="replace").strip()[-STDERR_TAIL_LIMIT:] or "<empty>"
 
 
 async def _shutdown(proc: asyncio.subprocess.Process, conn: Any) -> None:

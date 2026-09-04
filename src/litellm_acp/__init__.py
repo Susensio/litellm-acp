@@ -16,6 +16,8 @@ pay-per-token API. See `litellm_acp.register_adapter` to add more adapters.
 
 from __future__ import annotations
 
+import logging
+
 import litellm
 
 from ._version import __version__
@@ -31,6 +33,8 @@ __all__ = [
     "__version__",
     "register_adapter",
 ]
+
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 acp_handler = ACPCustomLLM()
 

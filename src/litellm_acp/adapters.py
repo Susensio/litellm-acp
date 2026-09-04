@@ -14,6 +14,7 @@ from lowest to highest precedence:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import tomllib
@@ -21,6 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import ACPAdapterNotFoundError
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "litellm-acp" / "adapters.toml"
 
@@ -70,6 +73,7 @@ def _load_config_file() -> None:
         with config_path.open("rb") as fh:
             raw = tomllib.load(fh)
     except (OSError, tomllib.TOMLDecodeError):
+        logger.warning("failed to read adapter config %s", config_path, exc_info=True)
         return
     _apply_overrides(raw)
 
@@ -81,6 +85,7 @@ def _load_env_override() -> None:
     try:
         raw = json.loads(raw_json)
     except json.JSONDecodeError:
+        logger.warning("failed to parse LITELLM_ACP_ADAPTERS as JSON", exc_info=True)
         return
     _apply_overrides(raw)
 
