@@ -3,7 +3,7 @@
 **Bring Your Own Subscription (BYOS)** for [LiteLLM](https://github.com/BerriAI/litellm).
 
 Route `litellm.completion()` / `litellm.acompletion()` calls to local CLI agents you already
-pay for with a flat-rate subscription (Claude Pro, ChatGPT Plus, Gemini, ...) via the
+pay for with a flat-rate subscription (Claude Pro, ChatGPT Plus, ...) via the
 [Agent Client Protocol](https://agentclientprotocol.com) (ACP), instead of a pay-per-token API.
 
 ```python
@@ -34,17 +34,19 @@ on your `PATH` (litellm-acp calls them directly - no `npx`):
 | --- | --- |
 | `acp/claude` | `npm install -g @agentclientprotocol/claude-agent-acp` |
 | `acp/codex` | `npm install -g @agentclientprotocol/codex-acp` |
-| `acp/gemini` | `npm install -g @google/gemini-cli` (ships the `gemini` binary; litellm-acp runs `gemini --acp`) |
+| `acp/agy` | not a built-in default - see [docs/agy.md](docs/agy.md) |
 
-Each adapter authenticates using that CLI's own login flow (e.g. `claude` / `codex` / `gemini`
-login), not an API key - that's the whole point.
+Each adapter authenticates using that CLI's own login flow (e.g. `claude` / `codex` login),
+not an API key - that's the whole point.
 
 If a binary isn't on your `PATH`, `litellm.completion()` raises a `CustomLLMError` with the
 exact install command instead of a confusing subprocess traceback.
 
 ## Adding your own adapter
 
-Three ways, lowest to highest precedence:
+Only registered adapters can be used.
+Unknown `acp/<name>` models fail before any subprocess is started.
+Add a custom adapter once by one of these methods, from highest to lowest precedence:
 
 **1. Runtime registration** (always wins):
 
@@ -70,8 +72,7 @@ binary = "mistral-acp-agent"
 args = ["--flag"]
 ```
 
-Any model name not in the registry falls back to treating the name itself as the binary, so
-`acp/some-binary-on-your-path` works with zero configuration.
+The config file is the recommended way to make custom adapters available across local projects.
 
 ## How it works
 
@@ -95,7 +96,7 @@ Any model name not in the registry falls back to treating the name itself as the
 - Token usage isn't reported (local CLI agents don't return LiteLLM-shaped usage stats), so
   cost tracking / budgets that depend on `usage` won't see real numbers.
 - LiteLLM resolves `custom_provider_map` entries by their exact `acp/` prefix, but bare model
-  names you register (`claude`, `codex`, `gemini`, ...) can collide with names LiteLLM already
+  names you register (`claude`, `codex`, ...) can collide with names LiteLLM already
   recognizes for *other* providers if you ever call them without the `acp/` prefix - always use
   the full `acp/<name>` form.
 
