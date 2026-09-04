@@ -9,14 +9,16 @@ from litellm_acp.adapters import resolve_adapter, resolve_and_check_adapter
 def test_default_registry_known_adapters():
     assert resolve_adapter("claude").binary == "claude-agent-acp"
     assert resolve_adapter("codex").binary == "codex-acp"
-    gemini = resolve_adapter("gemini")
-    assert gemini.binary == "gemini"
-    assert gemini.args == ["--acp"]
 
 
-def test_unknown_name_falls_back_to_literal_binary():
-    spec = resolve_adapter("some-custom-binary")
-    assert spec.argv() == ["some-custom-binary"]
+def test_unknown_name_requires_explicit_registration():
+    with pytest.raises(ACPAdapterNotFoundError) as excinfo:
+        resolve_adapter("some-custom-binary")
+
+    message = str(excinfo.value)
+    assert "acp/some-custom-binary" in message
+    assert "register_adapter" in message
+    assert "adapters.toml" in message
 
 
 def test_register_adapter_overrides_default():
@@ -49,9 +51,24 @@ def test_binary_present_on_path_resolves(tmp_path, monkeypatch):
 
 
 def test_env_var_override_registers_adapter(monkeypatch):
-    monkeypatch.setenv("LITELLM_ACP_ADAPTERS", '{"envtest": {"binary": "env-test-binary", "args": ["--x"]}}')
+    monkeypatch.setenv(
+        "LITELLM_ACP_ADAPTERS", '{"envtest": {"binary": "env-test-binary", "args": ["--x"]}}'
+    )
     from litellm_acp.adapters import _load_env_override
 
     _load_env_override()
     spec = resolve_adapter("envtest")
     assert spec.argv() == ["env-test-binary", "--x"]
+
+
+def test_config_file_registers_adapter(tmp_path, monkeypatch):
+    config_path = tmp_path / "adapters.toml"
+    config_path.write_text(
+        "[adapters.configtest]\nbinary = 'config-test-binary'\nargs = ['--config']\n"
+    )
+    monkeypatch.setenv("LITELLM_ACP_CONFIG", str(config_path))
+    from litellm_acp.adapters import _load_config_file
+
+    _load_config_file()
+    spec = resolve_adapter("configtest")
+    assert spec.argv() == ["config-test-binary", "--config"]

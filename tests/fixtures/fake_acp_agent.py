@@ -2,7 +2,7 @@
 
 Spoken over stdio via the official `acp` SDK's agent-side helpers, so the
 integration tests exercise the real ACP wire protocol without depending on
-any real CLI (claude-agent-acp, codex-acp, gemini) being installed.
+any real CLI (claude-agent-acp or codex-acp) being installed.
 """
 
 from __future__ import annotations

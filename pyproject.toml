@@ -17,7 +17,6 @@ keywords = [
     "llm",
     "claude",
     "codex",
-    "gemini",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

@@ -39,7 +39,6 @@ class AdapterSpec:
 ADAPTER_REGISTRY: dict[str, AdapterSpec] = {
     "claude": AdapterSpec(binary="claude-agent-acp"),
     "codex": AdapterSpec(binary="codex-acp"),
-    "gemini": AdapterSpec(binary="gemini", args=["--acp"]),
 }
 
 
@@ -95,12 +94,10 @@ _load_overrides()
 
 
 def resolve_adapter(name: str) -> AdapterSpec:
-    """Look up (or fall back to) the adapter for a bare model name like ``claude``."""
+    """Look up the configured adapter for a bare model name like ``claude``."""
     spec = ADAPTER_REGISTRY.get(name)
     if spec is None:
-        # Not a known adapter: treat the name itself as a literal binary so
-        # unregistered/custom adapters still work without code changes.
-        spec = AdapterSpec(binary=name)
+        raise ACPAdapterNotFoundError(name)
     return spec
 
 

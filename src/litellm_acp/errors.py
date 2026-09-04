@@ -5,7 +5,6 @@ from __future__ import annotations
 _INSTALL_HINTS: dict[str, str] = {
     "claude": "npm install -g @agentclientprotocol/claude-agent-acp",
     "codex": "npm install -g @agentclientprotocol/codex-acp",
-    "gemini": "npm install -g @google/gemini-cli   # ships the `gemini` binary; litellm-acp runs `gemini --acp`",
 }
 
 _GENERIC_HINT = (
@@ -15,11 +14,29 @@ _GENERIC_HINT = (
     "    litellm_acp.register_adapter('{name}', '<binary-name>')"
 )
 
+_REGISTRATION_HINT = (
+    "register it with:\n"
+    "    import litellm_acp\n"
+    "    litellm_acp.register_adapter('{name}', '<binary-name>')\n"
+    "or configure it with LITELLM_ACP_ADAPTERS or "
+    "~/.config/litellm-acp/adapters.toml"
+)
+
 
 class ACPAdapterNotFoundError(Exception):
-    """Raised when the local CLI binary for an ``acp/<name>`` model isn't on PATH."""
+    """Raised when an ``acp/<name>`` model is unregistered or its binary is unavailable."""
 
-    def __init__(self, name: str, binary: str) -> None:
+    def __init__(self, name: str, binary: str | None = None) -> None:
+        if binary is None:
+            message = (
+                f"litellm-acp: no ACP adapter is registered for model 'acp/{name}'.\n"
+                + _REGISTRATION_HINT.format(name=name)
+            )
+            super().__init__(message)
+            self.name = name
+            self.binary = None
+            return
+
         hint = _INSTALL_HINTS.get(name) or _GENERIC_HINT.format(name=name, binary=binary)
         message = (
             f"litellm-acp: could not find the '{binary}' executable on your PATH "

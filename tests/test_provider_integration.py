@@ -1,6 +1,6 @@
 """End-to-end tests: drive the real ACP wire protocol against a fake local agent.
 
-No real subscription CLI (claude-agent-acp, codex-acp, gemini) is required -
+No real subscription CLI (claude-agent-acp or codex-acp) is required -
 these spawn tests/fixtures/fake_acp_agent.py, which speaks ACP for real over
 stdio via the official `acp` SDK's agent-side helpers.
 """
