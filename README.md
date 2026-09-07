@@ -6,6 +6,12 @@ Route `litellm.completion()` / `litellm.acompletion()` calls to local CLI agents
 pay for with a flat-rate subscription (Claude Pro, ChatGPT Plus, ...) via the
 [Agent Client Protocol](https://agentclientprotocol.com) (ACP), instead of a pay-per-token API.
 
+> [!WARNING]
+> **Experimental project.** ACP adapters and subscription CLIs can change or break without notice.
+> Using a subscription through an adapter may violate the provider's terms of service and could put
+> your account at risk. Review the applicable terms before use; you are responsible for ensuring
+> your use complies with them.
+
 ```python
 import litellm
 import litellm_acp  # registers the "acp" custom provider on import
