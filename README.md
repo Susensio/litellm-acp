@@ -103,13 +103,22 @@ The config file is the recommended way to make custom adapters available across 
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest
+uv sync --all-groups
+just check
 ```
 
 The test suite spawns a bundled fake ACP agent (`tests/fixtures/fake_acp_agent.py`) that
 speaks the real ACP wire protocol, so it doesn't require any real subscription CLI to be
 installed.
+
+To also smoke-test a locally installed, authenticated adapter, opt in explicitly:
+
+```bash
+LITELLM_ACP_SMOKE_MODEL=claude uv run pytest -m real_adapter
+```
+
+That test is skipped unless `LITELLM_ACP_SMOKE_MODEL` is set, so it is safe for the regular
+test suite and CI.
 
 ## License
 
