@@ -1,7 +1,10 @@
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 

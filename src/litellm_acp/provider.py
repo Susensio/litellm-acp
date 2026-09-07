@@ -1,7 +1,5 @@
 """The `CustomLLM` provider: bridges LiteLLM calls to a local ACP CLI agent."""
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import logging
@@ -9,14 +7,15 @@ import os
 import tempfile
 import threading
 from collections.abc import Coroutine
+from importlib.metadata import version
 from typing import Any, BinaryIO
 
 from acp import PROTOCOL_VERSION, connect_to_agent
 from acp.schema import ClientCapabilities, Implementation
+from httpx import Timeout
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.types.utils import ModelResponse
 
-from ._version import __version__
 from .adapters import AdapterSpec, resolve_and_check_adapter
 from .client import ACPCollectorClient
 from .errors import ACPAdapterNotFoundError
@@ -52,7 +51,7 @@ class ACPCustomLLM(CustomLLM):
         litellm_params=None,
         logger_fn=None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout=None,
         client=None,
         **kwargs: Any,
     ) -> ModelResponse:
@@ -82,7 +81,7 @@ class ACPCustomLLM(CustomLLM):
         litellm_params=None,
         logger_fn=None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout=None,
         client=None,
         **kwargs: Any,
     ) -> ModelResponse:
@@ -93,9 +92,15 @@ class ACPCustomLLM(CustomLLM):
         except ACPAdapterNotFoundError as exc:
             raise CustomLLMError(status_code=500, message=str(exc)) from exc
 
-        prompt_timeout = timeout or DEFAULT_TIMEOUT_SECONDS
+        prompt_timeout = _resolve_timeout(timeout)
         text = await _run_acp_session(adapter, messages, prompt_timeout)
         return apply_response_text(model_response, text, model=f"acp/{model}")
+
+
+def _resolve_timeout(timeout: float | Timeout | None) -> float:
+    if isinstance(timeout, Timeout):
+        return timeout.read or DEFAULT_TIMEOUT_SECONDS
+    return timeout or DEFAULT_TIMEOUT_SECONDS
 
 
 def _run_sync(coro: Coroutine[Any, Any, ModelResponse]) -> ModelResponse:
@@ -130,14 +135,24 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
     # write() once it's written enough stderr, and reading it back afterwards
     # needs every process holding the write end (grandchildren included) to
     # have closed it, which isn't guaranteed once we've merely killed `proc`.
+    deadline = asyncio.get_running_loop().time() + timeout
     stderr_file = tempfile.TemporaryFile()
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *adapter.argv(),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=stderr_file,
+        proc = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                *adapter.argv(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=stderr_file,
+            ),
+            timeout=_remaining_timeout(deadline),
         )
+    except TimeoutError as exc:
+        stderr_file.close()
+        raise CustomLLMError(
+            status_code=504,
+            message=f"litellm-acp: timed out starting '{adapter.binary}'.",
+        ) from exc
     except OSError as exc:
         stderr_file.close()
         raise CustomLLMError(
@@ -161,18 +176,18 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
                 protocol_version=PROTOCOL_VERSION,
                 client_capabilities=ClientCapabilities(),
                 client_info=Implementation(
-                    name="litellm-acp", title="litellm-acp", version=__version__
+                    name="litellm-acp", title="litellm-acp", version=version("litellm-acp")
                 ),
             ),
-            timeout=timeout,
+            timeout=_remaining_timeout(deadline),
         )
         session = await asyncio.wait_for(
             conn.new_session(mcp_servers=[], cwd=os.getcwd()),
-            timeout=timeout,
+            timeout=_remaining_timeout(deadline),
         )
         await asyncio.wait_for(
             conn.prompt(session_id=session.session_id, prompt=messages_to_prompt(messages)),
-            timeout=timeout,
+            timeout=_remaining_timeout(deadline),
         )
     except TimeoutError as exc:
         logger.error(
@@ -201,6 +216,13 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
         stderr_file.close()
 
     return client_impl.text
+
+
+def _remaining_timeout(deadline: float) -> float:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise TimeoutError
+    return remaining
 
 
 def _read_stderr_tail(stderr_file: BinaryIO) -> str:

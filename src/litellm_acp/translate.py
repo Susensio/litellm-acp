@@ -1,11 +1,22 @@
 """Translate between LiteLLM's OpenAI-shaped messages and the ACP protocol."""
 
-from __future__ import annotations
-
-from acp.schema import TextContentBlock
+from acp.schema import (
+    AudioContentBlock,
+    EmbeddedResourceContentBlock,
+    ImageContentBlock,
+    ResourceContentBlock,
+    TextContentBlock,
+)
 from litellm.types.utils import ModelResponse
 
 _ROLE_LABELS = {"system": "System", "user": "User", "assistant": "Assistant", "tool": "Tool"}
+ACPContentBlock = (
+    TextContentBlock
+    | ImageContentBlock
+    | AudioContentBlock
+    | ResourceContentBlock
+    | EmbeddedResourceContentBlock
+)
 
 
 def _content_to_text(content: object) -> str:
@@ -27,7 +38,7 @@ def _content_to_text(content: object) -> str:
     return str(content)
 
 
-def messages_to_prompt(messages: list[dict]) -> list[TextContentBlock]:
+def messages_to_prompt(messages: list[dict]) -> list[ACPContentBlock]:
     """Flatten an OpenAI-style message list into a single ACP text prompt block.
 
     ACP agent sessions don't accept resent OpenAI-style history the way a

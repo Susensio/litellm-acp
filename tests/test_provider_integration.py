@@ -5,12 +5,20 @@ these spawn tests/fixtures/fake_acp_agent.py, which speaks ACP for real over
 stdio via the official `acp` SDK's agent-side helpers.
 """
 
-from __future__ import annotations
-
 import litellm
+import pytest
+from httpx import Timeout
 
 import litellm_acp  # noqa: F401 - import side effect registers the "acp" provider
 from litellm_acp import register_adapter
+from litellm_acp.provider import DEFAULT_TIMEOUT_SECONDS, _resolve_timeout
+
+
+def test_http_timeout_uses_its_read_deadline():
+    assert _resolve_timeout(Timeout(10.0)) == 10.0
+    assert _resolve_timeout(Timeout(connect=10.0, read=None, write=10.0, pool=10.0)) == (
+        DEFAULT_TIMEOUT_SECONDS
+    )
 
 
 def test_sync_completion_round_trips_through_fake_agent(fake_agent_argv):
@@ -37,6 +45,24 @@ async def test_async_completion_round_trips_through_fake_agent(fake_agent_argv):
     )
 
     assert response.choices[0].message.content == "echo: async hello"
+
+
+async def test_timeout_is_shared_by_the_whole_acp_session(fake_agent_argv):
+    binary, *args = fake_agent_argv
+    register_adapter(
+        "fake-shared-timeout",
+        binary,
+        args=[*args, "--new-session-delay", "1.2", "--prompt-delay", "1.2"],
+    )
+
+    with pytest.raises(
+        litellm.exceptions.APIConnectionError, match=r"did not respond within 2(?:\.0)?s"
+    ):
+        await litellm.acompletion(
+            model="acp/fake-shared-timeout",
+            messages=[{"role": "user", "content": "slow hello"}],
+            timeout=2,
+        )
 
 
 def test_multi_turn_history_is_flattened_before_reaching_agent(fake_agent_argv):
