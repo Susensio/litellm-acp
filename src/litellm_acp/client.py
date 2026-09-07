@@ -6,8 +6,6 @@ them. Everything other than `session_update` is implemented defensively in
 case an agent asks anyway.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from acp import Client, RequestError
@@ -81,7 +79,11 @@ class ACPCollectorClient(Client):
         self._chunks.append(_text_of(update.content))
 
     async def request_permission(
-        self, session_id: str, tool_call: ToolCallUpdate, options: list[PermissionOption], **kwargs: Any
+        self,
+        session_id: str,
+        tool_call: ToolCallUpdate,
+        options: list[PermissionOption],
+        **kwargs: Any,
     ) -> RequestPermissionResponse:
         return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
 
@@ -91,7 +93,12 @@ class ACPCollectorClient(Client):
         raise RequestError.method_not_found("fs/write_text_file")
 
     async def read_text_file(
-        self, session_id: str, path: str, line: int | None = None, limit: int | None = None, **kwargs: Any
+        self,
+        session_id: str,
+        path: str,
+        line: int | None = None,
+        limit: int | None = None,
+        **kwargs: Any,
     ) -> ReadTextFileResponse:
         raise RequestError.method_not_found("fs/read_text_file")
 
@@ -107,7 +114,9 @@ class ACPCollectorClient(Client):
     ) -> CreateTerminalResponse:
         raise RequestError.method_not_found("terminal/create")
 
-    async def terminal_output(self, session_id: str, terminal_id: str, **kwargs: Any) -> TerminalOutputResponse:
+    async def terminal_output(
+        self, session_id: str, terminal_id: str, **kwargs: Any
+    ) -> TerminalOutputResponse:
         raise RequestError.method_not_found("terminal/output")
 
     async def release_terminal(
@@ -120,10 +129,14 @@ class ACPCollectorClient(Client):
     ) -> WaitForTerminalExitResponse:
         raise RequestError.method_not_found("terminal/wait_for_exit")
 
-    async def kill_terminal(self, session_id: str, terminal_id: str, **kwargs: Any) -> KillTerminalResponse | None:
+    async def kill_terminal(
+        self, session_id: str, terminal_id: str, **kwargs: Any
+    ) -> KillTerminalResponse | None:
         raise RequestError.method_not_found("terminal/kill")
 
-    async def create_elicitation(self, message: str, mode: ElicitationMode, **kwargs: Any) -> CreateElicitationResponse:
+    async def create_elicitation(
+        self, message: str, mode: ElicitationMode, **kwargs: Any
+    ) -> CreateElicitationResponse:
         return DeclineElicitationResponse(action="decline")
 
     async def complete_elicitation(self, elicitation_id: str, **kwargs: Any) -> None:

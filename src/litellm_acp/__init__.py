@@ -14,16 +14,16 @@ routes to the local `claude-agent-acp` CLI over stdio (ACP) instead of a
 pay-per-token API. See `litellm_acp.register_adapter` to add more adapters.
 """
 
-from __future__ import annotations
-
 import logging
+from importlib.metadata import version
 
 import litellm
 
-from ._version import __version__
 from .adapters import ADAPTER_REGISTRY, AdapterSpec, register_adapter
 from .errors import ACPAdapterNotFoundError
 from .provider import ACPCustomLLM
+
+__version__ = version("litellm-acp")
 
 __all__ = [
     "ADAPTER_REGISTRY",

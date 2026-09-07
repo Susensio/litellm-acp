@@ -136,86 +136,81 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
     # needs every process holding the write end (grandchildren included) to
     # have closed it, which isn't guaranteed once we've merely killed `proc`.
     deadline = asyncio.get_running_loop().time() + timeout
-    stderr_file = tempfile.TemporaryFile()
-    try:
-        proc = await asyncio.wait_for(
-            asyncio.create_subprocess_exec(
-                *adapter.argv(),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=stderr_file,
-            ),
-            timeout=_remaining_timeout(deadline),
-        )
-    except TimeoutError as exc:
-        stderr_file.close()
-        raise CustomLLMError(
-            status_code=504,
-            message=f"litellm-acp: timed out starting '{adapter.binary}'.",
-        ) from exc
-    except OSError as exc:
-        stderr_file.close()
-        raise CustomLLMError(
-            status_code=500,
-            message=f"litellm-acp: failed to start '{' '.join(adapter.argv())}': {exc}",
-        ) from exc
-
-    if proc.stdin is None or proc.stdout is None:
-        proc.kill()
-        stderr_file.close()
-        raise CustomLLMError(
-            status_code=500,
-            message=f"litellm-acp: '{adapter.binary}' did not expose stdio pipes",
-        )
-
-    client_impl = ACPCollectorClient()
-    conn = connect_to_agent(client_impl, proc.stdin, proc.stdout)
-    try:
-        await asyncio.wait_for(
-            conn.initialize(
-                protocol_version=PROTOCOL_VERSION,
-                client_capabilities=ClientCapabilities(),
-                client_info=Implementation(
-                    name="litellm-acp", title="litellm-acp", version=version("litellm-acp")
+    with tempfile.TemporaryFile() as stderr_file:
+        try:
+            proc = await asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    *adapter.argv(),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=stderr_file,
                 ),
-            ),
-            timeout=_remaining_timeout(deadline),
-        )
-        session = await asyncio.wait_for(
-            conn.new_session(mcp_servers=[], cwd=os.getcwd()),
-            timeout=_remaining_timeout(deadline),
-        )
-        await asyncio.wait_for(
-            conn.prompt(session_id=session.session_id, prompt=messages_to_prompt(messages)),
-            timeout=_remaining_timeout(deadline),
-        )
-    except TimeoutError as exc:
-        logger.error(
-            "'%s' did not respond within %ss; stderr: %s",
-            adapter.binary,
-            timeout,
-            _read_stderr_tail(stderr_file),
-        )
-        raise CustomLLMError(
-            status_code=504,
-            message=(
-                f"litellm-acp: '{adapter.binary}' did not respond within {timeout}s. "
-                "Pass a longer timeout=... to litellm.completion(...) if the agent is just slow."
-            ),
-        ) from exc
-    except Exception:
-        logger.error(
-            "'%s' failed; stderr: %s",
-            adapter.binary,
-            _read_stderr_tail(stderr_file),
-            exc_info=True,
-        )
-        raise
-    finally:
-        await _shutdown(proc, conn)
-        stderr_file.close()
+                timeout=_remaining_timeout(deadline),
+            )
+        except TimeoutError as exc:
+            raise CustomLLMError(
+                status_code=504,
+                message=f"litellm-acp: timed out starting '{adapter.binary}'.",
+            ) from exc
+        except OSError as exc:
+            raise CustomLLMError(
+                status_code=500,
+                message=f"litellm-acp: failed to start '{' '.join(adapter.argv())}': {exc}",
+            ) from exc
 
-    return client_impl.text
+        if proc.stdin is None or proc.stdout is None:
+            proc.kill()
+            raise CustomLLMError(
+                status_code=500,
+                message=f"litellm-acp: '{adapter.binary}' did not expose stdio pipes",
+            )
+
+        client_impl = ACPCollectorClient()
+        conn = connect_to_agent(client_impl, proc.stdin, proc.stdout)
+        try:
+            await asyncio.wait_for(
+                conn.initialize(
+                    protocol_version=PROTOCOL_VERSION,
+                    client_capabilities=ClientCapabilities(),
+                    client_info=Implementation(
+                        name="litellm-acp", title="litellm-acp", version=version("litellm-acp")
+                    ),
+                ),
+                timeout=_remaining_timeout(deadline),
+            )
+            session = await asyncio.wait_for(
+                conn.new_session(mcp_servers=[], cwd=os.getcwd()),
+                timeout=_remaining_timeout(deadline),
+            )
+            await asyncio.wait_for(
+                conn.prompt(session_id=session.session_id, prompt=messages_to_prompt(messages)),
+                timeout=_remaining_timeout(deadline),
+            )
+        except TimeoutError as exc:
+            logger.error(
+                "'%s' did not respond within %ss; stderr: %s",
+                adapter.binary,
+                timeout,
+                _read_stderr_tail(stderr_file),
+            )
+            raise CustomLLMError(
+                status_code=504,
+                message=(
+                    f"litellm-acp: '{adapter.binary}' did not respond within {timeout}s. "
+                    "Pass a longer timeout=... to litellm.completion(...) if the agent is just slow."
+                ),
+            ) from exc
+        except Exception:
+            logger.exception(
+                "'%s' failed; stderr: %s",
+                adapter.binary,
+                _read_stderr_tail(stderr_file),
+            )
+            raise
+        finally:
+            await _shutdown(proc, conn)
+
+        return client_impl.text
 
 
 def _remaining_timeout(deadline: float) -> float:

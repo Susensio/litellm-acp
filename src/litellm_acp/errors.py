@@ -1,7 +1,5 @@
 """Errors raised by litellm-acp, with actionable install instructions."""
 
-from __future__ import annotations
-
 _INSTALL_HINTS: dict[str, str] = {
     "claude": "npm install -g @agentclientprotocol/claude-agent-acp",
     "codex": "npm install -g @agentclientprotocol/codex-acp",

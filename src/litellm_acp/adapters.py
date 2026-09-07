@@ -11,8 +11,6 @@ from lowest to highest precedence:
 4. Calling :func:`register_adapter` at runtime, which always wins.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import os
