@@ -1,10 +1,5 @@
 """Errors raised by litellm-acp, with actionable install instructions."""
 
-_INSTALL_HINTS: dict[str, str] = {
-    "claude": "npm install -g @agentclientprotocol/claude-agent-acp",
-    "codex": "npm install -g @agentclientprotocol/codex-acp",
-}
-
 _GENERIC_HINT = (
     "install the adapter for '{name}' and make sure the `{binary}` binary is on your PATH, "
     "or point litellm-acp at a different binary with:\n"
@@ -24,7 +19,9 @@ _REGISTRATION_HINT = (
 class ACPAdapterNotFoundError(Exception):
     """Raised when an ``acp/<name>`` model is unregistered or its binary is unavailable."""
 
-    def __init__(self, name: str, binary: str | None = None) -> None:
+    def __init__(
+        self, name: str, binary: str | None = None, install_hint: str | None = None
+    ) -> None:
         if binary is None:
             message = (
                 f"litellm-acp: no ACP adapter is registered for model 'acp/{name}'.\n"
@@ -35,7 +32,7 @@ class ACPAdapterNotFoundError(Exception):
             self.binary = None
             return
 
-        hint = _INSTALL_HINTS.get(name) or _GENERIC_HINT.format(name=name, binary=binary)
+        hint = install_hint or _GENERIC_HINT.format(name=name, binary=binary)
         message = (
             f"litellm-acp: could not find the '{binary}' executable on your PATH "
             f"for model 'acp/{name}'.\n"

@@ -1,9 +1,18 @@
+import json
 import os
+from pathlib import Path
 
 import pytest
 
 from litellm_acp import ACPAdapterNotFoundError, register_adapter
-from litellm_acp.adapters import resolve_adapter, resolve_and_check_adapter
+from litellm_acp.adapters import (
+    DEFAULT_ADAPTERS,
+    load_adapters,
+    resolve_adapter,
+    resolve_and_check_adapter,
+)
+
+NO_CONFIG = Path("/nonexistent/adapters.toml")
 
 
 def test_default_registry_known_adapters():
@@ -23,20 +32,29 @@ def test_unknown_name_requires_explicit_registration():
 
 def test_register_adapter_overrides_default():
     register_adapter("claude", "my-claude-fork", args=["--flag"])
-    try:
-        spec = resolve_adapter("claude")
-        assert spec.argv() == ["my-claude-fork", "--flag"]
-    finally:
-        register_adapter("claude", "claude-agent-acp")
+
+    assert resolve_adapter("claude").argv() == ["my-claude-fork", "--flag"]
 
 
-def test_missing_binary_raises_helpful_error():
+def test_missing_default_binary_shows_its_install_command(monkeypatch):
+    monkeypatch.setenv("PATH", "/nonexistent")
+
+    with pytest.raises(ACPAdapterNotFoundError) as excinfo:
+        resolve_and_check_adapter("claude")
+
+    assert "npm install -g @agentclientprotocol/claude-agent-acp" in str(excinfo.value)
+
+
+def test_missing_custom_binary_shows_generic_hint():
     register_adapter("definitely-missing", "totally-not-a-real-binary-xyz")
+
     with pytest.raises(ACPAdapterNotFoundError) as excinfo:
         resolve_and_check_adapter("definitely-missing")
+
     message = str(excinfo.value)
     assert "totally-not-a-real-binary-xyz" in message
     assert "acp/definitely-missing" in message
+    assert "register_adapter" in message
 
 
 def test_binary_present_on_path_resolves(tmp_path, monkeypatch):
@@ -50,25 +68,75 @@ def test_binary_present_on_path_resolves(tmp_path, monkeypatch):
     assert spec.binary == "fake-adapter-bin"
 
 
-def test_env_var_override_registers_adapter(monkeypatch):
-    monkeypatch.setenv(
-        "LITELLM_ACP_ADAPTERS", '{"envtest": {"binary": "env-test-binary", "args": ["--x"]}}'
-    )
-    from litellm_acp.adapters import _load_env_override
+def test_readme_lists_each_default_install_command():
+    readme = (Path(__file__).parents[1] / "README.md").read_text()
 
-    _load_env_override()
-    spec = resolve_adapter("envtest")
-    assert spec.argv() == ["env-test-binary", "--x"]
+    for spec in DEFAULT_ADAPTERS.values():
+        assert spec.install_hint in readme
 
 
-def test_config_file_registers_adapter(tmp_path, monkeypatch):
-    config_path = tmp_path / "adapters.toml"
-    config_path.write_text(
-        "[adapters.configtest]\nbinary = 'config-test-binary'\nargs = ['--config']\n"
-    )
-    monkeypatch.setenv("LITELLM_ACP_CONFIG", str(config_path))
-    from litellm_acp.adapters import _load_config_file
+def test_no_config_means_defaults():
+    assert load_adapters({}, NO_CONFIG) == dict(DEFAULT_ADAPTERS)
 
-    _load_config_file()
-    spec = resolve_adapter("configtest")
-    assert spec.argv() == ["config-test-binary", "--config"]
+
+def test_config_file_adds_adapters(tmp_path):
+    config = tmp_path / "adapters.toml"
+    config.write_text("[adapters.mine]\nbinary = 'my-binary'\nargs = ['--config']\n")
+
+    adapters = load_adapters({"LITELLM_ACP_CONFIG": str(config)}, NO_CONFIG)
+
+    assert adapters["mine"].argv() == ["my-binary", "--config"]
+    assert adapters["claude"] == DEFAULT_ADAPTERS["claude"]
+
+
+def test_default_config_path_is_read_without_the_env_variable(tmp_path):
+    config = tmp_path / "adapters.toml"
+    config.write_text("[adapters]\nmine = 'my-binary'\n")
+
+    assert load_adapters({}, config)["mine"].binary == "my-binary"
+
+
+def test_env_variable_overrides_config_file_overrides_defaults(tmp_path):
+    config = tmp_path / "adapters.toml"
+    config.write_text("[adapters]\nclaude = 'from-config'\ncodex = 'from-config'\n")
+    environ = {
+        "LITELLM_ACP_CONFIG": str(config),
+        "LITELLM_ACP_ADAPTERS": json.dumps({"codex": {"binary": "from-env", "args": ["--x"]}}),
+    }
+
+    adapters = load_adapters(environ, NO_CONFIG)
+
+    assert adapters["claude"].binary == "from-config"
+    assert adapters["codex"].argv() == ["from-env", "--x"]
+
+
+def test_overriding_a_default_drops_its_install_command():
+    # The npm command installs the official adapter, not whatever replaced it.
+    adapters = load_adapters({"LITELLM_ACP_ADAPTERS": '{"claude": "my-fork"}'}, NO_CONFIG)
+
+    assert adapters["claude"].install_hint is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not json",
+        '["a", "list"]',
+        '{"broken": {"args": ["no binary"]}}',
+        '{"broken": 42}',
+    ],
+)
+def test_malformed_env_variable_is_skipped_not_fatal(raw, caplog):
+    adapters = load_adapters({"LITELLM_ACP_ADAPTERS": raw}, NO_CONFIG)
+
+    assert "broken" not in adapters
+    assert adapters["claude"] == DEFAULT_ADAPTERS["claude"]
+    assert caplog.records
+
+
+def test_unparseable_config_file_is_skipped(tmp_path, caplog):
+    config = tmp_path / "adapters.toml"
+    config.write_text("this is = = not toml")
+
+    assert load_adapters({"LITELLM_ACP_CONFIG": str(config)}, NO_CONFIG) == dict(DEFAULT_ADAPTERS)
+    assert caplog.records

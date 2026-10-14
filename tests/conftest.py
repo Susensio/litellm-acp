@@ -7,9 +7,20 @@ import litellm
 import pytest
 from litellm.integrations.custom_logger import CustomLogger
 
+from litellm_acp.adapters import ADAPTER_REGISTRY
+
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _restore_adapter_registry():
+    """Undo whatever a test registers, so registrations never leak between tests."""
+    saved = dict(ADAPTER_REGISTRY)
+    yield
+    ADAPTER_REGISTRY.clear()
+    ADAPTER_REGISTRY.update(saved)
 
 
 @pytest.fixture
