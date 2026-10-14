@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
 from importlib.metadata import version
 from typing import Any, BinaryIO, TypeVar
 
+import litellm
 from acp import PROTOCOL_VERSION, connect_to_agent
 from acp.schema import ClientCapabilities, Cost, Implementation, Usage
 from httpx import Timeout
@@ -21,7 +22,14 @@ from litellm.types.utils import GenericStreamingChunk, ModelResponse
 from .adapters import AdapterSpec, resolve_and_check_adapter
 from .client import ACPCollectorClient
 from .errors import ACPAdapterNotFoundError
-from .translate import apply_response_text, apply_usage, messages_to_prompt, to_litellm_usage
+from .translate import (
+    API_EQUIVALENT_COST_KEY,
+    api_equivalent_cost,
+    apply_response_text,
+    apply_usage,
+    messages_to_prompt,
+    to_litellm_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,9 +159,32 @@ class ACPCustomLLM(CustomLLM):
 
 def _resolve_adapter(model: str) -> AdapterSpec:
     try:
-        return resolve_and_check_adapter(model)
+        adapter = resolve_and_check_adapter(model)
     except ACPAdapterNotFoundError as exc:
         raise CustomLLMError(status_code=500, message=str(exc)) from exc
+    _price_at_zero(f"acp/{model}")
+    return adapter
+
+
+def _price_at_zero(model: str) -> None:
+    """Give `model` a zero price in LiteLLM's cost map, unless the user priced it already.
+
+    A subscription call costs nothing at the margin, so cost tracking and
+    budgets should see $0 - not "unmapped model", which logs no cost at all.
+    Written directly rather than via `litellm.register_model`, which prints
+    lookup errors to stdout for providers it doesn't know.
+    """
+    litellm.model_cost.setdefault(
+        model,
+        {
+            "litellm_provider": "acp",
+            "mode": "chat",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "cache_creation_input_token_cost": 0.0,
+            "cache_read_input_token_cost": 0.0,
+        },
+    )
 
 
 async def _stream_acp_session(
@@ -168,11 +199,12 @@ async def _stream_acp_session(
     try:
         while (text := await texts.get()) is not None:
             yield _stream_chunk(text)
-        _, usage, _ = await session
+        _, usage, cost = await session
         yield _stream_chunk(
             "",
             finish_reason="stop",
             usage=_stream_usage(usage) if usage is not None else None,
+            api_cost=api_equivalent_cost(cost),
         )
     finally:
         # Only still running if the caller stopped consuming early: tear the
@@ -197,9 +229,12 @@ def _stream_usage(usage: Usage) -> ChatCompletionUsageBlock:
 
 
 def _stream_chunk(
-    text: str, finish_reason: str = "", usage: ChatCompletionUsageBlock | None = None
+    text: str,
+    finish_reason: str = "",
+    usage: ChatCompletionUsageBlock | None = None,
+    api_cost: float | None = None,
 ) -> GenericStreamingChunk:
-    return GenericStreamingChunk(
+    chunk = GenericStreamingChunk(
         text=text,
         tool_use=None,
         is_finished=bool(finish_reason),
@@ -207,6 +242,9 @@ def _stream_chunk(
         usage=usage,
         index=0,
     )
+    if api_cost is not None:
+        chunk["provider_specific_fields"] = {API_EQUIVALENT_COST_KEY: api_cost}
+    return chunk
 
 
 def _resolve_timeout(timeout: float | Timeout | None) -> float:

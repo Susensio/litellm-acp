@@ -94,15 +94,26 @@ def to_litellm_usage(usage: Usage) -> LiteLLMUsage:
     )
 
 
+API_EQUIVALENT_COST_KEY = "acp_api_equivalent_cost"
+
+
+def api_equivalent_cost(cost: Cost | None) -> float | None:
+    """The adapter's estimate of what the call would cost at API prices, in USD.
+
+    Not what the subscription charges - informational only, never `response_cost`.
+    """
+    if cost is None or cost.currency.upper() != "USD":
+        return None
+    return cost.amount
+
+
 def apply_usage(model_response: ModelResponse, usage: Usage | None, cost: Cost | None) -> None:
-    """Populate token usage and adapter-reported cost on the ModelResponse in place.
+    """Populate token usage and the adapter's API-equivalent cost on the ModelResponse in place.
 
     Whatever an adapter doesn't report is left at LiteLLM's defaults.
     """
     if usage is not None:
         # `usage` isn't a declared field of ModelResponse; litellm sets it the same way.
         setattr(model_response, "usage", to_litellm_usage(usage))  # noqa: B010
-    # LiteLLM's cost map has no `acp/*` entries, so without this its cost
-    # tracking reports nothing. Only USD: LiteLLM's costs are USD throughout.
-    if cost is not None and cost.currency.upper() == "USD":
-        model_response._hidden_params["response_cost"] = cost.amount
+    if (amount := api_equivalent_cost(cost)) is not None:
+        model_response._hidden_params[API_EQUIVALENT_COST_KEY] = amount

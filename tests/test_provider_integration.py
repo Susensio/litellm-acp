@@ -85,11 +85,13 @@ def test_multi_turn_history_is_flattened_before_reaching_agent(fake_agent_argv):
     assert "[Assistant]\nhello" in content
 
 
-def test_adapter_reported_usage_and_cost_reach_litellm(fake_agent_argv):
+async def test_adapter_reported_usage_reaches_litellm_and_cost_is_zero(
+    fake_agent_argv, logged_costs
+):
     binary, *args = fake_agent_argv
     register_adapter("fake-usage", binary, args=[*args, "--report-usage"])
 
-    response = litellm.completion(
+    response = await litellm.acompletion(
         model="acp/fake-usage",
         messages=[{"role": "user", "content": "count me"}],
     )
@@ -101,17 +103,30 @@ def test_adapter_reported_usage_and_cost_reach_litellm(fake_agent_argv):
     assert usage.prompt_tokens_details.cached_tokens == 300
     assert usage.cache_creation_input_tokens == 40
     assert usage.completion_tokens_details.reasoning_tokens == 5
-    assert response._hidden_params["response_cost"] == 0.0425
+    assert response._hidden_params["acp_api_equivalent_cost"] == 0.0425
+    assert await logged_costs.wait_for("fake-usage") == [0.0]
 
 
-def test_adapter_without_usage_leaves_litellm_defaults(fake_agent_argv):
+async def test_adapter_without_usage_still_logs_zero_cost(fake_agent_argv, logged_costs):
     binary, *args = fake_agent_argv
     register_adapter("fake-no-usage", binary, args=args)
 
-    response = litellm.completion(
+    response = await litellm.acompletion(
         model="acp/fake-no-usage",
         messages=[{"role": "user", "content": "hi"}],
     )
 
     assert response.usage.total_tokens == 0
-    assert response._hidden_params["response_cost"] is None
+    assert "acp_api_equivalent_cost" not in response._hidden_params
+    assert await logged_costs.wait_for("fake-no-usage") == [0.0]
+
+
+def test_user_set_price_is_not_overwritten(fake_agent_argv, monkeypatch):
+    binary, *args = fake_agent_argv
+    register_adapter("fake-priced", binary, args=args)
+    price = {"litellm_provider": "acp", "mode": "chat", "input_cost_per_token": 1.0}
+    monkeypatch.setitem(litellm.model_cost, "acp/fake-priced", price)
+
+    litellm.completion(model="acp/fake-priced", messages=[{"role": "user", "content": "hi"}])
+
+    assert litellm.model_cost["acp/fake-priced"] is price

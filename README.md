@@ -96,15 +96,17 @@ The config file is the recommended way to make custom adapters available across 
 
 ## Caveats
 
-- `stream=True` yields each agent message chunk as the adapter sends it. Token usage arrives
-  with the last chunk, but LiteLLM recalculates cost from the reassembled stream and finds no
-  `acp/*` price entry, so streamed calls are logged with no cost.
+- `stream=True` yields each agent message chunk as the adapter sends it, with token usage on
+  the last chunk.
 - No true multi-turn *server-side* session reuse - see "How it works" above.
-- `response.usage` and the cost LiteLLM logs come only from what the adapter reports.
-  `acp/claude` reports tokens and a USD cost; `acp/codex` reports tokens but no cost, so its
-  cost is logged as zero. An adapter that reports neither leaves both at zero.
-- The cost is what the adapter calculates the call *would* cost at API prices, not what your
-  flat-rate subscription charges. LiteLLM budgets will count it against their limits.
+- `response.usage` comes from what the adapter reports: `acp/claude` and `acp/codex` both
+  report tokens. An adapter that doesn't leaves usage at zero.
+- LiteLLM logs `acp/*` calls at **$0**: a subscription call costs nothing extra, so budgets
+  and spend tracking shouldn't count it. litellm-acp gives each `acp/<name>` a zero-price
+  entry in `litellm.model_cost` on first use; set your own entry beforehand to price it
+  differently. Where the adapter estimates what the call would have cost at API prices
+  (`acp/claude` does), that figure is in `response._hidden_params["acp_api_equivalent_cost"]`,
+  or in a final chunk's `delta.provider_specific_fields` when streaming.
 - LiteLLM resolves `custom_provider_map` entries by their exact `acp/` prefix, but bare model
   names you register (`claude`, `codex`, ...) can collide with names LiteLLM already
   recognizes for *other* providers if you ever call them without the `acp/` prefix - always use

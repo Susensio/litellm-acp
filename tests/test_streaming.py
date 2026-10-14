@@ -36,6 +36,21 @@ def test_sync_stream_yields_reply_and_usage(fake_agent_argv):
     assert chunks[-1].usage.completion_tokens == 20
 
 
+async def test_stream_logs_zero_cost_and_carries_api_equivalent(fake_agent_argv, logged_costs):
+    binary, *args = fake_agent_argv
+    register_adapter("fake-stream-cost", binary, args=[*args, "--report-usage"])
+
+    stream = await litellm.acompletion(
+        model="acp/fake-stream-cost",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+    )
+    fields = [c.choices[0].delta.provider_specific_fields async for c in stream if c.choices]
+
+    assert {"acp_api_equivalent_cost": 0.0425} in fields
+    assert await logged_costs.wait_for("fake-stream-cost") == [0.0]
+
+
 async def test_async_stream_delivers_chunks_as_the_agent_sends_them(fake_agent_argv):
     binary, *args = fake_agent_argv
     register_adapter("fake-stream-async", binary, args=[*args, "--chunk-delay", "0.4"])
