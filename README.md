@@ -96,8 +96,9 @@ The config file is the recommended way to make custom adapters available across 
 
 ## Caveats
 
-- No streaming yet (`stream=True` isn't implemented) - `astreaming`/`streaming` raise the
-  default `CustomLLMError`.
+- `stream=True` yields each agent message chunk as the adapter sends it. Token usage arrives
+  with the last chunk, but LiteLLM recalculates cost from the reassembled stream and finds no
+  `acp/*` price entry, so streamed calls are logged with no cost.
 - No true multi-turn *server-side* session reuse - see "How it works" above.
 - `response.usage` and the cost LiteLLM logs come only from what the adapter reports.
   `acp/claude` reports tokens and a USD cost; `acp/codex` reports tokens but no cost, so its

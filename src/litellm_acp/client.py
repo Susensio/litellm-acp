@@ -6,6 +6,7 @@ them. Everything other than `session_update` is implemented defensively in
 case an agent asks anyway.
 """
 
+from collections.abc import Callable
 from typing import Any
 
 from acp import Client, RequestError
@@ -50,8 +51,10 @@ from acp.schema import (
 class ACPCollectorClient(Client):
     """Buffers `AgentMessageChunk` text and the latest `UsageUpdate` cost from `session_update` calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_text: Callable[[str], None] | None = None) -> None:
         self._chunks: list[str] = []
+        # Called with each text chunk as it arrives, for streaming.
+        self._on_text = on_text
         # Cumulative for the session; each completion runs in a fresh session, so the
         # last value reported is this call's cost.
         self.cost: Cost | None = None
@@ -79,7 +82,10 @@ class ACPCollectorClient(Client):
         **kwargs: Any,
     ) -> None:
         if isinstance(update, AgentMessageChunk):
-            self._chunks.append(_text_of(update.content))
+            text = _text_of(update.content)
+            self._chunks.append(text)
+            if self._on_text is not None and text:
+                self._on_text(text)
         elif isinstance(update, UsageUpdate) and update.cost is not None:
             self.cost = update.cost
 

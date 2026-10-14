@@ -7,6 +7,8 @@ any real CLI (claude-agent-acp or codex-acp) being installed.
 
 import argparse
 import asyncio
+import os
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -34,11 +36,17 @@ class FakeEchoAgent(Agent):
     _conn: Client
 
     def __init__(
-        self, new_session_delay: float = 0, prompt_delay: float = 0, report_usage: bool = False
+        self,
+        new_session_delay: float = 0,
+        prompt_delay: float = 0,
+        report_usage: bool = False,
+        chunk_delay: float | None = None,
     ) -> None:
         self._new_session_delay = new_session_delay
         self._prompt_delay = prompt_delay
         self._report_usage = report_usage
+        # When set, the echo is sent word by word with this delay between words.
+        self._chunk_delay = chunk_delay
 
     def on_connect(self, conn: Client) -> None:
         self._conn = conn
@@ -75,12 +83,17 @@ class FakeEchoAgent(Agent):
         **kwargs: Any,
     ) -> PromptResponse:
         await asyncio.sleep(self._prompt_delay)
-        text = "".join(getattr(block, "text", "") for block in prompt)
-        chunk = AgentMessageChunk(
-            session_update="agent_message_chunk",
-            content=TextContentBlock(type="text", text=f"echo: {text}"),
-        )
-        await self._conn.session_update(session_id=session_id, update=chunk)
+        text = "echo: " + "".join(getattr(block, "text", "") for block in prompt)
+        pieces = [text] if self._chunk_delay is None else text.split(" ")
+        for i, piece in enumerate(pieces):
+            if i:
+                await asyncio.sleep(self._chunk_delay or 0)
+                piece = " " + piece
+            chunk = AgentMessageChunk(
+                session_update="agent_message_chunk",
+                content=TextContentBlock(type="text", text=piece),
+            )
+            await self._conn.session_update(session_id=session_id, update=chunk)
         if not self._report_usage:
             return PromptResponse(stop_reason="end_turn")
 
@@ -112,8 +125,16 @@ async def main() -> None:
     parser.add_argument("--new-session-delay", type=float, default=0)
     parser.add_argument("--prompt-delay", type=float, default=0)
     parser.add_argument("--report-usage", action="store_true")
+    parser.add_argument("--chunk-delay", type=float)
+    parser.add_argument("--pid-file")
     args = parser.parse_args()
-    await run_agent(FakeEchoAgent(args.new_session_delay, args.prompt_delay, args.report_usage))
+    if args.pid_file:
+        Path(args.pid_file).write_text(str(os.getpid()))
+    await run_agent(
+        FakeEchoAgent(
+            args.new_session_delay, args.prompt_delay, args.report_usage, args.chunk_delay
+        )
+    )
 
 
 if __name__ == "__main__":
