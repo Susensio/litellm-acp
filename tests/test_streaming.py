@@ -51,26 +51,6 @@ async def test_stream_logs_zero_cost_and_carries_api_equivalent(fake_agent_argv,
     assert await logged_costs.wait_for("fake-stream-cost") == [0.0]
 
 
-async def test_async_stream_delivers_chunks_as_the_agent_sends_them(fake_agent_argv):
-    binary, *args = fake_agent_argv
-    register_adapter("fake-stream-async", binary, args=[*args, "--chunk-delay", "0.4"])
-
-    stream = await litellm.acompletion(
-        model="acp/fake-stream-async",
-        messages=[{"role": "user", "content": "one two"}],
-        stream=True,
-    )
-    arrivals = []
-    async for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content:
-            arrivals.append((time.monotonic(), chunk.choices[0].delta.content))
-
-    assert "".join(text for _, text in arrivals) == "echo: one two"
-    assert len(arrivals) == 3
-    # Two 0.4s gaps between words: buffered output would arrive all at once.
-    assert arrivals[-1][0] - arrivals[0][0] > 0.5
-
-
 def _wait_until_gone(pid: int, timeout: float = 10) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

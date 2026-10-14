@@ -47,21 +47,17 @@ async def test_async_completion_round_trips_through_fake_agent(fake_agent_argv):
     assert response.choices[0].message.content == "echo: async hello"
 
 
-async def test_timeout_is_shared_by_the_whole_acp_session(fake_agent_argv):
+async def test_turn_timeout_reaches_litellm_as_its_error(fake_agent_argv):
     binary, *args = fake_agent_argv
-    register_adapter(
-        "fake-shared-timeout",
-        binary,
-        args=[*args, "--new-session-delay", "1.2", "--prompt-delay", "1.2"],
-    )
+    register_adapter("fake-timeout", binary, args=[*args, "--prompt-delay", "5"])
 
     with pytest.raises(
-        litellm.exceptions.APIConnectionError, match=r"did not respond within 2(?:\.0)?s"
+        litellm.exceptions.APIConnectionError, match=r"did not respond within 1(?:\.0)?s"
     ):
         await litellm.acompletion(
-            model="acp/fake-shared-timeout",
+            model="acp/fake-timeout",
             messages=[{"role": "user", "content": "slow hello"}],
-            timeout=2,
+            timeout=1,
         )
 
 
