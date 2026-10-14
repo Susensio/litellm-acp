@@ -62,11 +62,18 @@ from acp.schema import (
 )
 
 from .adapters import AdapterSpec
-from .translate import ACPContentBlock
 
 logger = logging.getLogger(__name__)
 
 STDERR_TAIL_LIMIT = 4096
+
+ACPContentBlock = (
+    TextContentBlock
+    | ImageContentBlock
+    | AudioContentBlock
+    | ResourceContentBlock
+    | EmbeddedResourceContentBlock
+)
 
 
 @dataclass(frozen=True)

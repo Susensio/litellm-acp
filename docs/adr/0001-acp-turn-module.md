@@ -35,3 +35,7 @@ Landed in commit `e221425`; `client.py` was deleted there.
 - Anything the agent reports per turn surfaces through `TurnEnd`; `stop_reason` became `finish_reason` that way in the following commit.
 - Teardown relies on generator closing. Consumers inside litellm-acp wrap the iterator in `contextlib.aclosing`; an external consumer that abandons it without closing leaves the adapter running until the generator is garbage-collected.
 - Only the two turn errors get mapped: errors the agent itself reports propagate as the ACP SDK raised them, as before the change.
+
+## Corrections
+
+- 2026-10-14: the Decision said the provider "shapes events into a `ModelResponse` or streaming chunks". Later the same day that shaping, with the $0 cost policy, moved into `translate.py` alongside message flattening, leaving `provider.py` with the entry points, adapter resolution and error mapping. The turn module staying LiteLLM-free was unaffected.

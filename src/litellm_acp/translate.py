@@ -1,27 +1,21 @@
-"""Translate between LiteLLM's OpenAI-shaped messages and the ACP protocol."""
+"""Translate between LiteLLM's OpenAI shapes and ACP turns, in both directions.
+
+In: OpenAI messages become one ACP prompt. Out: a turn's events become a
+`ModelResponse` or streaming chunks, including the cost policy - LiteLLM sees
+$0 for `acp/*` calls, and the adapter's API-price estimate rides alongside.
+"""
 
 from typing import Literal
 
-from acp.schema import (
-    AudioContentBlock,
-    Cost,
-    EmbeddedResourceContentBlock,
-    ImageContentBlock,
-    ResourceContentBlock,
-    TextContentBlock,
-    Usage,
-)
-from litellm.types.utils import ModelResponse
+import litellm
+from acp.schema import Cost, TextContentBlock, Usage
+from litellm.types.llms.openai import ChatCompletionUsageBlock
+from litellm.types.utils import GenericStreamingChunk, ModelResponse
 from litellm.types.utils import Usage as LiteLLMUsage
 
+from .turn import ACPContentBlock, TextDelta, TurnEnd, TurnEvent
+
 _ROLE_LABELS = {"system": "System", "user": "User", "assistant": "Assistant", "tool": "Tool"}
-ACPContentBlock = (
-    TextContentBlock
-    | ImageContentBlock
-    | AudioContentBlock
-    | ResourceContentBlock
-    | EmbeddedResourceContentBlock
-)
 
 
 def _content_to_text(content: object) -> str:
@@ -65,33 +59,105 @@ def messages_to_prompt(messages: list[dict]) -> list[ACPContentBlock]:
     return [TextContentBlock(type="text", text="\n\n".join(lines))]
 
 
+API_EQUIVALENT_COST_KEY = "acp_api_equivalent_cost"
+
+
+def fill_model_response(
+    model_response: ModelResponse, text: str, end: TurnEnd, model: str
+) -> ModelResponse:
+    """Populate litellm's pre-built ModelResponse in place with a finished turn.
+
+    Whatever the adapter didn't report (usage, cost) is left at LiteLLM's defaults.
+    """
+    choice = model_response.choices[0]
+    choice.message.content = text
+    choice.message.role = "assistant"
+    choice.finish_reason = _finish_reason(end.stop_reason)
+    model_response.model = model
+    if end.usage is not None:
+        # `usage` isn't a declared field of ModelResponse; litellm sets it the same way.
+        setattr(model_response, "usage", _to_litellm_usage(end.usage))  # noqa: B010
+    if (amount := _api_equivalent_cost(end.cost)) is not None:
+        model_response._hidden_params[API_EQUIVALENT_COST_KEY] = amount
+    return model_response
+
+
+def stream_chunk(event: TurnEvent) -> GenericStreamingChunk:
+    """One turn event as a LiteLLM streaming chunk; the `TurnEnd` one finishes the stream."""
+    if isinstance(event, TextDelta):
+        return _chunk(event.text)
+    full = _to_litellm_usage(event.usage) if event.usage is not None else None
+    chunk = _chunk(
+        "",
+        finish_reason=_finish_reason(event.stop_reason),
+        usage=ChatCompletionUsageBlock(
+            prompt_tokens=full.prompt_tokens,
+            completion_tokens=full.completion_tokens,
+            total_tokens=full.total_tokens,
+            prompt_tokens_details=full.prompt_tokens_details.model_dump()
+            if full.prompt_tokens_details
+            else None,
+            completion_tokens_details=full.completion_tokens_details.model_dump()
+            if full.completion_tokens_details
+            else None,
+        )
+        if full is not None
+        else None,
+    )
+    if (amount := _api_equivalent_cost(event.cost)) is not None:
+        chunk["provider_specific_fields"] = {API_EQUIVALENT_COST_KEY: amount}
+    return chunk
+
+
+def price_at_zero(model: str) -> None:
+    """Give `model` a zero price in LiteLLM's cost map, unless the user priced it already.
+
+    A subscription call costs nothing at the margin, so cost tracking and
+    budgets should see $0 - not "unmapped model", which logs no cost at all.
+    Written directly rather than via `litellm.register_model`, which prints
+    lookup errors to stdout for providers it doesn't know.
+    """
+    litellm.model_cost.setdefault(
+        model,
+        {
+            "litellm_provider": "acp",
+            "mode": "chat",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "cache_creation_input_token_cost": 0.0,
+            "cache_read_input_token_cost": 0.0,
+        },
+    )
+
+
+def _chunk(
+    text: str, finish_reason: str = "", usage: ChatCompletionUsageBlock | None = None
+) -> GenericStreamingChunk:
+    return GenericStreamingChunk(
+        text=text,
+        tool_use=None,
+        is_finished=bool(finish_reason),
+        finish_reason=finish_reason,
+        usage=usage,
+        index=0,
+    )
+
+
 # ACP StopReason -> OpenAI finish_reason. "cancelled" only follows a client-side
 # cancel, which litellm-acp never sends, so it falls through to "stop".
-FinishReason = Literal["stop", "length", "content_filter"]
-_FINISH_REASONS: dict[str, FinishReason] = {
+_FinishReason = Literal["stop", "length", "content_filter"]
+_FINISH_REASONS: dict[str, _FinishReason] = {
     "max_tokens": "length",
     "max_turn_requests": "length",
     "refusal": "content_filter",
 }
 
 
-def finish_reason(stop_reason: str) -> FinishReason:
+def _finish_reason(stop_reason: str) -> _FinishReason:
     return _FINISH_REASONS.get(stop_reason, "stop")
 
 
-def apply_response_text(
-    model_response: ModelResponse, text: str, model: str, stop_reason: str
-) -> ModelResponse:
-    """Populate litellm's pre-built ModelResponse in place with the ACP agent's reply."""
-    choice = model_response.choices[0]
-    choice.message.content = text
-    choice.message.role = "assistant"
-    choice.finish_reason = finish_reason(stop_reason)
-    model_response.model = model
-    return model_response
-
-
-def to_litellm_usage(usage: Usage) -> LiteLLMUsage:
+def _to_litellm_usage(usage: Usage) -> LiteLLMUsage:
     """Convert an ACP turn's token usage into LiteLLM's OpenAI-shaped `Usage`.
 
     ACP adapters report `input_tokens` net of cache reads and writes (Anthropic
@@ -112,10 +178,7 @@ def to_litellm_usage(usage: Usage) -> LiteLLMUsage:
     )
 
 
-API_EQUIVALENT_COST_KEY = "acp_api_equivalent_cost"
-
-
-def api_equivalent_cost(cost: Cost | None) -> float | None:
+def _api_equivalent_cost(cost: Cost | None) -> float | None:
     """The adapter's estimate of what the call would cost at API prices, in USD.
 
     Not what the subscription charges - informational only, never `response_cost`.
@@ -123,15 +186,3 @@ def api_equivalent_cost(cost: Cost | None) -> float | None:
     if cost is None or cost.currency.upper() != "USD":
         return None
     return cost.amount
-
-
-def apply_usage(model_response: ModelResponse, usage: Usage | None, cost: Cost | None) -> None:
-    """Populate token usage and the adapter's API-equivalent cost on the ModelResponse in place.
-
-    Whatever an adapter doesn't report is left at LiteLLM's defaults.
-    """
-    if usage is not None:
-        # `usage` isn't a declared field of ModelResponse; litellm sets it the same way.
-        setattr(model_response, "usage", to_litellm_usage(usage))  # noqa: B010
-    if (amount := api_equivalent_cost(cost)) is not None:
-        model_response._hidden_params[API_EQUIVALENT_COST_KEY] = amount

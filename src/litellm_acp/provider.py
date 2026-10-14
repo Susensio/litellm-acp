@@ -7,24 +7,13 @@ import threading
 from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Iterator
 from typing import Any, TypeVar
 
-import litellm
-from acp.schema import Usage
 from httpx import Timeout
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
-from litellm.types.llms.openai import ChatCompletionUsageBlock
 from litellm.types.utils import GenericStreamingChunk, ModelResponse
 
 from .adapters import AdapterSpec, resolve_and_check_adapter
 from .errors import ACPAdapterNotFoundError
-from .translate import (
-    API_EQUIVALENT_COST_KEY,
-    api_equivalent_cost,
-    apply_response_text,
-    apply_usage,
-    finish_reason,
-    messages_to_prompt,
-    to_litellm_usage,
-)
+from .translate import fill_model_response, messages_to_prompt, price_at_zero, stream_chunk
 from .turn import TextDelta, TurnEnd, TurnEvent, TurnFailedError, TurnTimeoutError, run_turn
 
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -99,17 +88,15 @@ class ACPCustomLLM(CustomLLM):
 
         prompt_timeout = _resolve_timeout(timeout)
         parts: list[str] = []
-        stop_reason = "end_turn"
+        end: TurnEnd | None = None
         async with contextlib.aclosing(_turn_events(adapter, messages, prompt_timeout)) as events:
             async for event in events:
                 if isinstance(event, TextDelta):
                     parts.append(event.text)
                 else:
-                    apply_usage(model_response, event.usage, event.cost)
-                    stop_reason = event.stop_reason
-        return apply_response_text(
-            model_response, "".join(parts), model=f"acp/{model}", stop_reason=stop_reason
-        )
+                    end = event
+        assert end is not None  # a turn that didn't raise always ends with TurnEnd
+        return fill_model_response(model_response, "".join(parts), end, model=f"acp/{model}")
 
     def streaming(
         self,
@@ -166,29 +153,8 @@ def _resolve_adapter(model: str) -> AdapterSpec:
         adapter = resolve_and_check_adapter(model)
     except ACPAdapterNotFoundError as exc:
         raise CustomLLMError(status_code=500, message=str(exc)) from exc
-    _price_at_zero(f"acp/{model}")
+    price_at_zero(f"acp/{model}")
     return adapter
-
-
-def _price_at_zero(model: str) -> None:
-    """Give `model` a zero price in LiteLLM's cost map, unless the user priced it already.
-
-    A subscription call costs nothing at the margin, so cost tracking and
-    budgets should see $0 - not "unmapped model", which logs no cost at all.
-    Written directly rather than via `litellm.register_model`, which prints
-    lookup errors to stdout for providers it doesn't know.
-    """
-    litellm.model_cost.setdefault(
-        model,
-        {
-            "litellm_provider": "acp",
-            "mode": "chat",
-            "input_cost_per_token": 0.0,
-            "output_cost_per_token": 0.0,
-            "cache_creation_input_token_cost": 0.0,
-            "cache_read_input_token_cost": 0.0,
-        },
-    )
 
 
 async def _turn_events(
@@ -212,53 +178,7 @@ async def _stream(
 ) -> AsyncGenerator[GenericStreamingChunk]:
     async with contextlib.aclosing(_turn_events(adapter, messages, timeout)) as events:
         async for event in events:
-            if isinstance(event, TextDelta):
-                yield _stream_chunk(event.text)
-            else:
-                yield _end_chunk(event)
-
-
-def _end_chunk(end: TurnEnd) -> GenericStreamingChunk:
-    return _stream_chunk(
-        "",
-        finish_reason=finish_reason(end.stop_reason),
-        usage=_stream_usage(end.usage) if end.usage is not None else None,
-        api_cost=api_equivalent_cost(end.cost),
-    )
-
-
-def _stream_usage(usage: Usage) -> ChatCompletionUsageBlock:
-    full = to_litellm_usage(usage)
-    return ChatCompletionUsageBlock(
-        prompt_tokens=full.prompt_tokens,
-        completion_tokens=full.completion_tokens,
-        total_tokens=full.total_tokens,
-        prompt_tokens_details=full.prompt_tokens_details.model_dump()
-        if full.prompt_tokens_details
-        else None,
-        completion_tokens_details=full.completion_tokens_details.model_dump()
-        if full.completion_tokens_details
-        else None,
-    )
-
-
-def _stream_chunk(
-    text: str,
-    finish_reason: str = "",
-    usage: ChatCompletionUsageBlock | None = None,
-    api_cost: float | None = None,
-) -> GenericStreamingChunk:
-    chunk = GenericStreamingChunk(
-        text=text,
-        tool_use=None,
-        is_finished=bool(finish_reason),
-        finish_reason=finish_reason,
-        usage=usage,
-        index=0,
-    )
-    if api_cost is not None:
-        chunk["provider_specific_fields"] = {API_EQUIVALENT_COST_KEY: api_cost}
-    return chunk
+            yield stream_chunk(event)
 
 
 def _resolve_timeout(timeout: float | Timeout | None) -> float:

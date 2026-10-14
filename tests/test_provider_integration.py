@@ -92,13 +92,8 @@ async def test_adapter_reported_usage_reaches_litellm_and_cost_is_zero(
         messages=[{"role": "user", "content": "count me"}],
     )
 
-    usage = response.usage
-    assert usage.prompt_tokens == 350  # 10 fresh + 300 cache read + 40 cache write
-    assert usage.completion_tokens == 20
-    assert usage.total_tokens == 370
-    assert usage.prompt_tokens_details.cached_tokens == 300
-    assert usage.cache_creation_input_tokens == 40
-    assert usage.completion_tokens_details.reasoning_tokens == 5
+    # The arithmetic is unit-tested in test_translate; this checks it's wired up.
+    assert response.usage.total_tokens == 370
     assert response._hidden_params["acp_api_equivalent_cost"] == 0.0425
     assert await logged_costs.wait_for("fake-usage") == [0.0]
 
