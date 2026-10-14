@@ -60,15 +60,18 @@ class ACPCustomLLM(CustomLLM):
         client=None,
         **kwargs: Any,
     ) -> ModelResponse:
-        return _run_sync(
-            self.acompletion(
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                timeout=timeout,
-                **kwargs,
+        [response] = _iterate_sync(
+            _yield_result(
+                self.acompletion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    timeout=timeout,
+                    **kwargs,
+                )
             )
         )
+        return response
 
     async def acompletion(
         self,
@@ -264,38 +267,17 @@ def _resolve_timeout(timeout: float | Timeout | None) -> float:
     return timeout or DEFAULT_TIMEOUT_SECONDS
 
 
-def _run_sync(coro: Coroutine[Any, Any, ModelResponse]) -> ModelResponse:
-    """Run an async completion from sync code, whether or not a loop is already running."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    # We're already inside a running event loop (e.g. an async caller invoked
-    # the sync `completion()` from a sync-wrapping context) - asyncio.run()
-    # would raise here, so drive the coroutine on its own loop in a thread.
-    outcome: dict[str, Any] = {}
-
-    def _runner() -> None:
-        try:
-            outcome["value"] = asyncio.run(coro)
-        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread below
-            outcome["error"] = exc
-
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join()
-
-    if "error" in outcome:
-        raise outcome["error"]
-    return outcome["value"]
+async def _yield_result(coro: Coroutine[Any, Any, T]) -> AsyncGenerator[T]:
+    """A coroutine as a one-item async iterator, so `_iterate_sync` can run it too."""
+    yield await coro
 
 
 def _iterate_sync(agen: AsyncIterator[T]) -> Iterator[T]:
     """Drive an async iterator from sync code, on its own loop in a helper thread.
 
-    The iterator must keep one loop for its whole life, and - as in `_run_sync` -
-    the caller may already be inside a running loop, so it can't be driven here.
+    The iterator must keep one loop for its whole life, and the caller may
+    already be inside a running loop, so it can't be driven on this thread.
+    The only crossing from sync into async: sync completion uses it too.
     """
     items: queue.Queue[tuple[str, Any]] = queue.Queue()
     started = threading.Event()

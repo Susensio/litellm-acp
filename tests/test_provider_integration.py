@@ -138,3 +138,15 @@ def test_truncated_reply_reports_length_not_stop(fake_agent_argv):
     )
 
     assert response.choices[0].finish_reason == "length"
+
+
+async def test_sync_completion_works_inside_a_running_event_loop(fake_agent_argv):
+    binary, *args = fake_agent_argv
+    register_adapter("fake-sync-in-loop", binary, args=args)
+
+    response = litellm.completion(
+        model="acp/fake-sync-in-loop",
+        messages=[{"role": "user", "content": "from a coroutine"}],
+    )
+
+    assert response.choices[0].message.content == "echo: from a coroutine"
