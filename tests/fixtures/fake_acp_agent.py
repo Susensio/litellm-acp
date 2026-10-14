@@ -41,12 +41,14 @@ class FakeEchoAgent(Agent):
         prompt_delay: float = 0,
         report_usage: bool = False,
         chunk_delay: float | None = None,
+        stop_reason: str = "end_turn",
     ) -> None:
         self._new_session_delay = new_session_delay
         self._prompt_delay = prompt_delay
         self._report_usage = report_usage
         # When set, the echo is sent word by word with this delay between words.
         self._chunk_delay = chunk_delay
+        self._stop_reason = stop_reason
 
     def on_connect(self, conn: Client) -> None:
         self._conn = conn
@@ -95,7 +97,7 @@ class FakeEchoAgent(Agent):
             )
             await self._conn.session_update(session_id=session_id, update=chunk)
         if not self._report_usage:
-            return PromptResponse(stop_reason="end_turn")
+            return PromptResponse(stop_reason=self._stop_reason)
 
         # Shaped like claude-agent-acp: input_tokens net of the cache counters,
         # cost as a cumulative usage_update (sent twice: only the last counts).
@@ -117,7 +119,7 @@ class FakeEchoAgent(Agent):
             thought_tokens=5,
             total_tokens=370,
         )
-        return PromptResponse(stop_reason="end_turn", usage=usage)
+        return PromptResponse(stop_reason=self._stop_reason, usage=usage)
 
 
 async def main() -> None:
@@ -127,12 +129,17 @@ async def main() -> None:
     parser.add_argument("--report-usage", action="store_true")
     parser.add_argument("--chunk-delay", type=float)
     parser.add_argument("--pid-file")
+    parser.add_argument("--stop-reason", default="end_turn")
     args = parser.parse_args()
     if args.pid_file:
         Path(args.pid_file).write_text(str(os.getpid()))
     await run_agent(
         FakeEchoAgent(
-            args.new_session_delay, args.prompt_delay, args.report_usage, args.chunk_delay
+            args.new_session_delay,
+            args.prompt_delay,
+            args.report_usage,
+            args.chunk_delay,
+            args.stop_reason,
         )
     )
 

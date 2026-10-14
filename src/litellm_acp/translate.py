@@ -1,5 +1,7 @@
 """Translate between LiteLLM's OpenAI-shaped messages and the ACP protocol."""
 
+from typing import Literal
+
 from acp.schema import (
     AudioContentBlock,
     Cost,
@@ -63,12 +65,28 @@ def messages_to_prompt(messages: list[dict]) -> list[ACPContentBlock]:
     return [TextContentBlock(type="text", text="\n\n".join(lines))]
 
 
-def apply_response_text(model_response: ModelResponse, text: str, model: str) -> ModelResponse:
+# ACP StopReason -> OpenAI finish_reason. "cancelled" only follows a client-side
+# cancel, which litellm-acp never sends, so it falls through to "stop".
+FinishReason = Literal["stop", "length", "content_filter"]
+_FINISH_REASONS: dict[str, FinishReason] = {
+    "max_tokens": "length",
+    "max_turn_requests": "length",
+    "refusal": "content_filter",
+}
+
+
+def finish_reason(stop_reason: str) -> FinishReason:
+    return _FINISH_REASONS.get(stop_reason, "stop")
+
+
+def apply_response_text(
+    model_response: ModelResponse, text: str, model: str, stop_reason: str
+) -> ModelResponse:
     """Populate litellm's pre-built ModelResponse in place with the ACP agent's reply."""
     choice = model_response.choices[0]
     choice.message.content = text
     choice.message.role = "assistant"
-    choice.finish_reason = "stop"
+    choice.finish_reason = finish_reason(stop_reason)
     model_response.model = model
     return model_response
 

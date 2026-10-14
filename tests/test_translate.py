@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock
 
-from litellm_acp.translate import apply_response_text, messages_to_prompt
+import pytest
+
+from litellm_acp.translate import apply_response_text, finish_reason, messages_to_prompt
 
 
 def test_single_user_message_sent_verbatim():
@@ -53,10 +55,26 @@ def test_apply_response_text_populates_model_response():
     choice = MagicMock(message=message, finish_reason=None)
     model_response = MagicMock(choices=[choice], model=None)
 
-    result = apply_response_text(model_response, "the reply", model="acp/claude")
+    result = apply_response_text(
+        model_response, "the reply", model="acp/claude", stop_reason="end_turn"
+    )
 
     assert result is model_response
     assert message.content == "the reply"
     assert message.role == "assistant"
     assert choice.finish_reason == "stop"
     assert model_response.model == "acp/claude"
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "expected"),
+    [
+        ("end_turn", "stop"),
+        ("max_tokens", "length"),
+        ("max_turn_requests", "length"),
+        ("refusal", "content_filter"),
+        ("cancelled", "stop"),
+    ],
+)
+def test_acp_stop_reasons_map_to_openai_finish_reasons(stop_reason, expected):
+    assert finish_reason(stop_reason) == expected

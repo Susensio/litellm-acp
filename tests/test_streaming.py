@@ -51,6 +51,21 @@ async def test_stream_logs_zero_cost_and_carries_api_equivalent(fake_agent_argv,
     assert await logged_costs.wait_for("fake-stream-cost") == [0.0]
 
 
+def test_refused_stream_reports_content_filter(fake_agent_argv):
+    binary, *args = fake_agent_argv
+    register_adapter("fake-stream-refusal", binary, args=[*args, "--stop-reason", "refusal"])
+
+    chunks = list(
+        litellm.completion(
+            model="acp/fake-stream-refusal",
+            messages=[{"role": "user", "content": "something refused"}],
+            stream=True,
+        )
+    )
+
+    assert "content_filter" in [c.choices[0].finish_reason for c in chunks if c.choices]
+
+
 def _wait_until_gone(pid: int, timeout: float = 10) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

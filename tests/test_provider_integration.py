@@ -126,3 +126,15 @@ def test_user_set_price_is_not_overwritten(fake_agent_argv, monkeypatch):
     litellm.completion(model="acp/fake-priced", messages=[{"role": "user", "content": "hi"}])
 
     assert litellm.model_cost["acp/fake-priced"] is price
+
+
+def test_truncated_reply_reports_length_not_stop(fake_agent_argv):
+    binary, *args = fake_agent_argv
+    register_adapter("fake-max-tokens", binary, args=[*args, "--stop-reason", "max_tokens"])
+
+    response = litellm.completion(
+        model="acp/fake-max-tokens",
+        messages=[{"role": "user", "content": "go on forever"}],
+    )
+
+    assert response.choices[0].finish_reason == "length"

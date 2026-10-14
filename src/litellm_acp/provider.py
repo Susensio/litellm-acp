@@ -21,6 +21,7 @@ from .translate import (
     api_equivalent_cost,
     apply_response_text,
     apply_usage,
+    finish_reason,
     messages_to_prompt,
     to_litellm_usage,
 )
@@ -95,13 +96,17 @@ class ACPCustomLLM(CustomLLM):
 
         prompt_timeout = _resolve_timeout(timeout)
         parts: list[str] = []
+        stop_reason = "end_turn"
         async with contextlib.aclosing(_turn_events(adapter, messages, prompt_timeout)) as events:
             async for event in events:
                 if isinstance(event, TextDelta):
                     parts.append(event.text)
                 else:
                     apply_usage(model_response, event.usage, event.cost)
-        return apply_response_text(model_response, "".join(parts), model=f"acp/{model}")
+                    stop_reason = event.stop_reason
+        return apply_response_text(
+            model_response, "".join(parts), model=f"acp/{model}", stop_reason=stop_reason
+        )
 
     def streaming(
         self,
@@ -213,7 +218,7 @@ async def _stream(
 def _end_chunk(end: TurnEnd) -> GenericStreamingChunk:
     return _stream_chunk(
         "",
-        finish_reason="stop",
+        finish_reason=finish_reason(end.stop_reason),
         usage=_stream_usage(end.usage) if end.usage is not None else None,
         api_cost=api_equivalent_cost(end.cost),
     )
