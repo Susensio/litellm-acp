@@ -83,3 +83,35 @@ def test_multi_turn_history_is_flattened_before_reaching_agent(fake_agent_argv):
     assert content.startswith("echo: ")
     assert "[User]\nhi" in content
     assert "[Assistant]\nhello" in content
+
+
+def test_adapter_reported_usage_and_cost_reach_litellm(fake_agent_argv):
+    binary, *args = fake_agent_argv
+    register_adapter("fake-usage", binary, args=[*args, "--report-usage"])
+
+    response = litellm.completion(
+        model="acp/fake-usage",
+        messages=[{"role": "user", "content": "count me"}],
+    )
+
+    usage = response.usage
+    assert usage.prompt_tokens == 350  # 10 fresh + 300 cache read + 40 cache write
+    assert usage.completion_tokens == 20
+    assert usage.total_tokens == 370
+    assert usage.prompt_tokens_details.cached_tokens == 300
+    assert usage.cache_creation_input_tokens == 40
+    assert usage.completion_tokens_details.reasoning_tokens == 5
+    assert response._hidden_params["response_cost"] == 0.0425
+
+
+def test_adapter_without_usage_leaves_litellm_defaults(fake_agent_argv):
+    binary, *args = fake_agent_argv
+    register_adapter("fake-no-usage", binary, args=args)
+
+    response = litellm.completion(
+        model="acp/fake-no-usage",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert response.usage.total_tokens == 0
+    assert response._hidden_params["response_cost"] is None

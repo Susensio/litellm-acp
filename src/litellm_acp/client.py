@@ -1,4 +1,4 @@
-"""A minimal, headless ACP `Client` that only collects the agent's text reply.
+"""A minimal, headless ACP `Client` that only collects the agent's text reply and cost.
 
 litellm-acp advertises no filesystem or terminal capabilities when it calls
 `initialize()` (see provider.py), so a well-behaved agent shouldn't ask for
@@ -18,6 +18,7 @@ from acp.schema import (
     AudioContentBlock,
     AvailableCommandsUpdate,
     ConfigOptionUpdate,
+    Cost,
     CreateElicitationResponse,
     CreateTerminalResponse,
     CurrentModeUpdate,
@@ -47,10 +48,13 @@ from acp.schema import (
 
 
 class ACPCollectorClient(Client):
-    """Buffers `AgentMessageChunk` text from `session_update` calls."""
+    """Buffers `AgentMessageChunk` text and the latest `UsageUpdate` cost from `session_update` calls."""
 
     def __init__(self) -> None:
         self._chunks: list[str] = []
+        # Cumulative for the session; each completion runs in a fresh session, so the
+        # last value reported is this call's cost.
+        self.cost: Cost | None = None
 
     @property
     def text(self) -> str:
@@ -74,9 +78,10 @@ class ACPCollectorClient(Client):
         | UsageUpdate,
         **kwargs: Any,
     ) -> None:
-        if not isinstance(update, AgentMessageChunk):
-            return
-        self._chunks.append(_text_of(update.content))
+        if isinstance(update, AgentMessageChunk):
+            self._chunks.append(_text_of(update.content))
+        elif isinstance(update, UsageUpdate) and update.cost is not None:
+            self.cost = update.cost
 
     async def request_permission(
         self,

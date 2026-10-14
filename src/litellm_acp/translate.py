@@ -2,12 +2,15 @@
 
 from acp.schema import (
     AudioContentBlock,
+    Cost,
     EmbeddedResourceContentBlock,
     ImageContentBlock,
     ResourceContentBlock,
     TextContentBlock,
+    Usage,
 )
 from litellm.types.utils import ModelResponse
+from litellm.types.utils import Usage as LiteLLMUsage
 
 _ROLE_LABELS = {"system": "System", "user": "User", "assistant": "Assistant", "tool": "Tool"}
 ACPContentBlock = (
@@ -68,3 +71,32 @@ def apply_response_text(model_response: ModelResponse, text: str, model: str) ->
     choice.finish_reason = "stop"
     model_response.model = model
     return model_response
+
+
+def apply_usage(model_response: ModelResponse, usage: Usage | None, cost: Cost | None) -> None:
+    """Populate token usage and adapter-reported cost on the ModelResponse in place.
+
+    ACP adapters report `input_tokens` net of cache reads and writes (Anthropic
+    semantics, which claude-agent-acp and codex-acp both normalize to), whereas
+    OpenAI's `prompt_tokens` includes them - so the cache counters are added back.
+    Whatever an adapter doesn't report is left at LiteLLM's defaults.
+    """
+    if usage is not None:
+        cache_read = usage.cached_read_tokens or 0
+        cache_write = usage.cached_write_tokens or 0
+        prompt_tokens = usage.input_tokens + cache_read + cache_write
+        # `usage` isn't a declared field of ModelResponse; litellm sets it the same way.
+        usage_obj = LiteLLMUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=usage.output_tokens,
+            total_tokens=prompt_tokens + usage.output_tokens,
+            prompt_tokens_details={"cached_tokens": cache_read},
+            completion_tokens_details={"reasoning_tokens": usage.thought_tokens},
+            cache_read_input_tokens=cache_read,
+            cache_creation_input_tokens=cache_write,
+        )
+        setattr(model_response, "usage", usage_obj)  # noqa: B010
+    # LiteLLM's cost map has no `acp/*` entries, so without this its cost
+    # tracking reports nothing. Only USD: LiteLLM's costs are USD throughout.
+    if cost is not None and cost.currency.upper() == "USD":
+        model_response._hidden_params["response_cost"] = cost.amount

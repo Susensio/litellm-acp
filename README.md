@@ -99,8 +99,11 @@ The config file is the recommended way to make custom adapters available across 
 - No streaming yet (`stream=True` isn't implemented) - `astreaming`/`streaming` raise the
   default `CustomLLMError`.
 - No true multi-turn *server-side* session reuse - see "How it works" above.
-- Token usage isn't reported (local CLI agents don't return LiteLLM-shaped usage stats), so
-  cost tracking / budgets that depend on `usage` won't see real numbers.
+- `response.usage` and the cost LiteLLM logs come only from what the adapter reports.
+  `acp/claude` reports tokens and a USD cost; `acp/codex` reports tokens but no cost, so its
+  cost is logged as zero. An adapter that reports neither leaves both at zero.
+- The cost is what the adapter calculates the call *would* cost at API prices, not what your
+  flat-rate subscription charges. LiteLLM budgets will count it against their limits.
 - LiteLLM resolves `custom_provider_map` entries by their exact `acp/` prefix, but bare model
   names you register (`claude`, `codex`, ...) can collide with names LiteLLM already
   recognizes for *other* providers if you ever call them without the `acp/` prefix - always use

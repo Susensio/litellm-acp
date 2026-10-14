@@ -11,7 +11,7 @@ from importlib.metadata import version
 from typing import Any, BinaryIO
 
 from acp import PROTOCOL_VERSION, connect_to_agent
-from acp.schema import ClientCapabilities, Implementation
+from acp.schema import ClientCapabilities, Cost, Implementation, Usage
 from httpx import Timeout
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.types.utils import ModelResponse
@@ -19,7 +19,7 @@ from litellm.types.utils import ModelResponse
 from .adapters import AdapterSpec, resolve_and_check_adapter
 from .client import ACPCollectorClient
 from .errors import ACPAdapterNotFoundError
-from .translate import apply_response_text, messages_to_prompt
+from .translate import apply_response_text, apply_usage, messages_to_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,8 @@ class ACPCustomLLM(CustomLLM):
             raise CustomLLMError(status_code=500, message=str(exc)) from exc
 
         prompt_timeout = _resolve_timeout(timeout)
-        text = await _run_acp_session(adapter, messages, prompt_timeout)
+        text, usage, cost = await _run_acp_session(adapter, messages, prompt_timeout)
+        apply_usage(model_response, usage, cost)
         return apply_response_text(model_response, text, model=f"acp/{model}")
 
 
@@ -130,7 +131,9 @@ def _run_sync(coro: Coroutine[Any, Any, ModelResponse]) -> ModelResponse:
     return outcome["value"]
 
 
-async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float) -> str:
+async def _run_acp_session(
+    adapter: AdapterSpec, messages: list, timeout: float
+) -> tuple[str, Usage | None, Cost | None]:
     # A real file, not PIPE: a pipe's OS buffer can fill and block the agent's
     # write() once it's written enough stderr, and reading it back afterwards
     # needs every process holding the write end (grandchildren included) to
@@ -182,7 +185,7 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
                 conn.new_session(mcp_servers=[], cwd=os.getcwd()),
                 timeout=_remaining_timeout(deadline),
             )
-            await asyncio.wait_for(
+            prompt_response = await asyncio.wait_for(
                 conn.prompt(session_id=session.session_id, prompt=messages_to_prompt(messages)),
                 timeout=_remaining_timeout(deadline),
             )
@@ -210,7 +213,7 @@ async def _run_acp_session(adapter: AdapterSpec, messages: list, timeout: float)
         finally:
             await _shutdown(proc, conn)
 
-        return client_impl.text
+        return client_impl.text, prompt_response.usage, client_impl.cost
 
 
 def _remaining_timeout(deadline: float) -> float:
